@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>EXCEL-land course and bank audit</title>
+    <style>
+      body { max-width: 980px; margin: 0 auto; padding: 32px 20px 80px; font-family: Consolas, monospace; background: #f4f7ef; color: #143d2b; }
+      .summary { padding: 16px 18px; border-radius: 14px; color: #fff; background: #143d2b; font-weight: 800; }
+      ol { display: grid; padding: 0; gap: 8px; list-style: none; }
+      li { display: flex; justify-content: space-between; gap: 20px; padding: 10px 13px; border: 1px solid #dce8d4; border-radius: 10px; background: #fff; font-size: 13px; }
+      .pass { color: #2f7d00; font-weight: 900; }
+      .fail, .error { color: #c83c2d; font-weight: 900; }
+    </style>
+  </head>
+  <body>
+    <h1>EXCEL-land course and bank audit</h1>
+    <div class="summary" id="summary">Running...</div>
+    <ol id="results"></ol>
+    <script src="../../src/core/formula.js"></script>
+    <script src="../../src/i18n/base.js"></script>
+    <script src="../../src/lab/i18n.js"></script>
+    <script src="../../src/content/course-data.js"></script>
+    <script src="../../src/content/lesson-kit.js"></script>
+    <script src="../../src/core/answer.js"></script>
+    <script src="../../src/core/sheet-ops.js"></script>
+    <script src="../../src/content/chapters/01-core.js"></script>
+    <script src="../../src/content/chapters/02-text.js"></script>
+    <script src="../../src/content/chapters/03-lookup.js"></script>
+    <script src="../../src/content/chapters/04-date.js"></script>
+    <script src="../../src/content/chapters/05-finance.js"></script>
+    <script src="../../src/content/chapters/06-data-analysis.js"></script>
+    <script src="../../src/content/chapters/07-capstones.js"></script>
+    <script src="../../src/content/chapters/08-workbook.js"></script>
+    <script src="../../src/content/chapters/09-data-tools.js"></script>
+    <script src="../../src/content/chapters/10-visuals.js"></script>
+    <script src="../../src/content/chapters/11-advanced-functions.js"></script>
+    <script src="../../src/content/chapters/fixes.js"></script>
+    <script src="../../src/content/banks/practice.js"></script>
+    <script>
+      const tests = [];
+      const test = (name, callback) => tests.push({ name, callback });
+      const taskById = (id) => {
+        let found = null;
+        window.COURSE.chapters.forEach((chapter) => {
+          chapter.levels.forEach((level) => {
+            level.steps.forEach((step) => {
+              (step.tasks || []).forEach((task) => {
+                if (task.id === id) found = task;
+              });
+            });
+          });
+        });
+        return found;
+      };
+      const stepById = (id) => {
+        for (const chapter of window.COURSE.chapters) {
+          for (const level of chapter.levels) {
+            for (const step of level.steps) {
+              if (step.id === id) return step;
+            }
+          }
+        }
+        return null;
+      };
+
+      test("lowercase references translate with fill", () => {
+        return AnswerEngine.translateFormula("=b2*c2*1.1", 1, 0) === "=B3*C3*1.1";
+      });
+
+      test("mixed references preserve locks and string literals", () => {
+        return AnswerEngine.translateFormula('=IF(A1>0,"a1",$B$2+C3)', 1, 1) === '=IF(B2>0,"a1",$B$2+D4)';
+      });
+
+      test("fill beyond the sheet boundary returns #REF!", () => {
+        return AnswerEngine.translateFormula("=A1", -1, 0) === "=#REF!" &&
+          AnswerEngine.translateFormula("=A1", 0, -1) === "=#REF!";
+      });
+
+      test("reference parser accepts lowercase cells", () => {
+        return AnswerEngine.parseReferenceSet("=b2+c3").join(",") === "B2,C3";
+      });
+
+      test("constant answers are rejected when source cells are required", () => {
+        const missing = AnswerEngine.missingSourceRefs("=6400", "=B2*C2");
+        return missing.join(",") === "B2,C2" &&
+          AnswerEngine.missingSourceRefs("=C2*B2", "=B2*C2").length === 0;
+      });
+
+      test("logic-check-a4 uses Wang row and boolean comparison", () => {
+        const task = taskById("logic-check-a4");
+        return task &&
+          task.target === "I6" &&
+          I18N.text(task.formulaExample).includes("G6/E6") &&
+          I18N.text(task.formulaExample).includes(">3000") &&
+          task.expected === true;
+      });
+
+      test("missing intermediate data tasks now compute real values", () => {
+        return Math.abs(taskById("absolute-transfer-total").expected - 710.4) < 1e-9 &&
+          taskById("agg-check-3").expected === 8020 &&
+          taskById("agg-mixed-3").expected === 8020;
+      });
+
+      test("text task targets are filled and never empty", () => {
+        return window.COURSE.chapters
+          .flatMap((chapter) => chapter.levels)
+          .flatMap((level) => level.steps)
+          .filter((step) => String(step.id).startsWith("text-guided"))
+          .flatMap((step) => step.tasks || [])
+          .every((task) => /^[A-Z]+\d+(?::[A-Z]+\d+)?$/.test(task.target || ""));
+      });
+
+      test("all course task targets are concrete addresses", () => {
+        return window.COURSE.chapters
+          .flatMap((chapter) => chapter.levels)
+          .flatMap((level) => level.steps)
+          .flatMap((step) => step.tasks || [])
+          .every((task) => task.operationOnly || /^[A-Z]+\d+(?::[A-Z]+\d+)?$/.test(task.target || ""));
+      });
+
+      test("quote builder allows commutative equivalent fill", () => {
+        return stepById("build-quote-amount").allowEquivalentFill === true;
+      });
+
+      test("SUBTOTAL hides filtered rows while SUM keeps them", () => {
+        const sheet = window.CurriculumKit.sheets.kpi;
+        const all = window.FormulaEngine.evaluate("=SUM(C2:C9)", sheet);
+        const hidden = Array.from({ length: 6 }, (_, index) => index + 4);
+        const visible = window.FormulaEngine.evaluate("=SUBTOTAL(9,C2:C9)", sheet, { hiddenRows: hidden });
+        const plainSum = window.FormulaEngine.evaluate("=SUM(C2:C9)", sheet, { hiddenRows: hidden });
+        return all.ok && visible.ok && plainSum.ok &&
+          all.value === 23680 &&
+          visible.value === 6100 &&
+          plainSum.value === 23680;
+      });
+
+      test("filter operations validate localized groups", () => {
+        const task = taskById("data-filter-guided-0");
+        const sheet = window.CurriculumKit.sheets.kpi;
+        const selected = I18N.text(task.operation.selectedValue, "zh-CN");
+        const hidden = window.SheetOperations.hiddenRowsForFilter(sheet, task.operation, selected);
+        return task && task.operation.type === "filter" &&
+          window.SheetOperations.validate(task, { selectedValue: selected, hiddenRows: hidden }, sheet).ok;
+      });
+
+      test("Excel-style multi-value filters keep the selected groups", () => {
+        const task = taskById("data-filter-guided-0");
+        const sheet = window.CurriculumKit.sheets.kpi;
+        const selected = ["华东", "华南"];
+        const hidden = window.SheetOperations.hiddenRowsForFilter(sheet, task.operation, selected);
+        return hidden.join(",") === "4,7,8,9" &&
+          window.SheetOperations.validate(task, {
+            selectedValues: selected,
+            hiddenRows: hidden,
+          }, sheet).reason === "filter-value";
+      });
+
+      test("find operations validate the active match", () => {
+        const task = taskById("data-find-guided-0");
+        const sheet = window.CurriculumKit.sheets.kpi;
+        const query = I18N.text(task.operation.query, "zh-CN");
+        return task && task.operation.type === "find" &&
+          window.SheetOperations.validate(task, {
+            findQuery: query,
+            activeFindRef: task.operation.expectedRef,
+            findPerformed: true,
+          }, sheet).ok;
+      });
+
+      test("find operations reject direct cell-picking shortcuts", () => {
+        const task = taskById("data-find-guided-0");
+        const sheet = window.CurriculumKit.sheets.kpi;
+        const query = I18N.text(task.operation.query, "zh-CN");
+        return window.SheetOperations.validate(task, {
+          findQuery: query,
+          activeFindRef: task.operation.expectedRef,
+          findPerformed: false,
+        }, sheet).reason === "find-missing";
+      });
+
+      test("wildcard Find supports ? and *", () => {
+        const sheet = window.CurriculumKit.sheets.orders;
+        const spec = { range: "A1:H11" };
+        return window.SheetOperations.findMatches(sheet, spec, "SO2601?5").join(",") === "A6" &&
+          window.SheetOperations.findMatches(sheet, spec, "*0104").join(",") === "A5" &&
+          window.SheetOperations.findMatches(sheet, spec, "SO2601*9").join(",") === "A10";
+      });
+
+      test("wildcard Find lesson is mounted in the course", () => {
+        const level = window.COURSE.levels.find((item) => item.id === "data-find-wildcards");
+        return Boolean(level) && level.steps.length === 2 &&
+          level.steps[1].tasks.some((task) => task.operation.query === "SO2601?5");
+      });
+
+      test("sheet operation primitives handle ranges and column names", () => {
+        const ref = window.SheetOperations.parseCellRef("$b$7");
+        const range = window.SheetOperations.parseRange("C5:A2");
+        return ref.col === 2 && ref.row === 7 &&
+          range.top === 2 && range.bottom === 5 && range.left === 1 && range.right === 3 &&
+          window.SheetOperations.cellName(1, 4) === "A4" &&
+          window.SheetOperations.cellName(26, 4) === "Z4" &&
+          window.SheetOperations.cellName(27, 4) === "AA4";
+      });
+
+      test("sheet operation primitives reject invalid Excel bounds and malformed ranges", () => {
+        return window.SheetOperations.parseCellRef("A0") === null &&
+          window.SheetOperations.parseCellRef("XFE1") === null &&
+          window.SheetOperations.parseRange("A1:B2:C3") === null;
+      });
+
+      test("filter engine handles one, many, all, and empty selections", () => {
+        const spec = { range: "A1:G9", column: "B" };
+        const sheet = window.CurriculumKit.sheets.kpi;
+        const one = window.SheetOperations.hiddenRowsForFilter(sheet, spec, "华东");
+        const many = window.SheetOperations.hiddenRowsForFilter(sheet, spec, ["华东", "华南"]);
+        const all = window.SheetOperations.hiddenRowsForFilter(sheet, spec, ["华东", "华北", "华南", "西南"]);
+        const none = window.SheetOperations.hiddenRowsForFilter(sheet, spec, []);
+        return one.join(",") === "4,5,6,7,8,9" &&
+          many.join(",") === "4,7,8,9" &&
+          all.length === 0 && none.length === 0;
+      });
+
+      test("filter engine can isolate blank values without case drift", () => {
+        const blank = window.SheetOperations.BLANK_FILTER_VALUE;
+        const sheet = { A1: "Name", B1: "Group", A2: "a", B2: "East", A3: "b", B3: "", A4: "c", B4: "east" };
+        const spec = { range: "A1:B4", column: "B" };
+        const values = window.SheetOperations.uniqueValues(sheet, spec);
+        const hidden = window.SheetOperations.hiddenRowsForFilter(sheet, spec, [blank]);
+        return values.includes(blank) && values.includes("East") &&
+          hidden.join(",") === "2,4";
+      });
+
+      test("find engine supports order, case, and whole-cell matching", () => {
+        const sheet = {
+          A1: "match", B1: "match",
+          A2: "match", B2: "other",
+          A3: "match", B3: "match",
+        };
+        const spec = { range: "A1:B3" };
+        const byRow = window.SheetOperations.findMatches(sheet, spec, "match", { searchBy: "row" });
+        const byColumn = window.SheetOperations.findMatches(sheet, spec, "match", { searchBy: "column" });
+        const whole = window.SheetOperations.findMatches(sheet, spec, "mat", { matchEntireCell: true });
+        const caseMiss = window.SheetOperations.findMatches({ A1: "ABC" }, { range: "A1:A1" }, "abc", { matchCase: true });
+        return byRow.join(",") === "A1,B1,A2,A3,B3" &&
+          byColumn.join(",") === "A1,A2,A3,B1,B3" &&
+          whole.length === 0 && caseMiss.length === 0;
+      });
+
+      test("find engine normalizes width and accepts case-insensitive queries", () => {
+        const caseInsensitive = window.SheetOperations.findMatches(
+          { A1: "Alpha" }, { range: "A1:A1" }, "alpha"
+        );
+        const widthFolded = window.SheetOperations.findMatches(
+          { A1: "Ａ" }, { range: "A1:A1" }, "A"
+        );
+        const widthExact = window.SheetOperations.findMatches(
+          { A1: "Ａ" }, { range: "A1:A1" }, "A", { distinguishWidth: true }
+        );
+        const task = {
+          operation: { type: "find", range: "A1:A1", query: "Alpha", expectedRef: "A1" },
+        };
+        const validated = window.SheetOperations.validate(task, {
+          findQuery: "alpha",
+          activeFindRef: "a1",
+          findPerformed: true,
+        }, { A1: "Alpha" });
+        return caseInsensitive.join(",") === "A1" &&
+          widthFolded.join(",") === "A1" && widthExact.length === 0 &&
+          validated.ok;
+      });
+
+      test("replace engine handles escaped wildcards and case", () => {
+        const sheet = { A1: "FY91?", B1: "abc", A2: "ABC", B2: "keep" };
+        const escaped = window.SheetOperations.replaceInRange(
+          sheet,
+          { range: "A1:B2" },
+          "FY91~?",
+          "OK",
+          false,
+        );
+        const cased = window.SheetOperations.replaceInRange(
+          sheet,
+          { range: "A1:B2" },
+          "abc",
+          "X",
+          true,
+        );
+        return escaped === 1 && sheet.A1 === "OK" &&
+          cased === 1 && sheet.B1 === "X" && sheet.A2 === "ABC";
+      });
+
+      test("replace engine counts occurrences, handles numbers, and treats replacement literally", () => {
+        const sheet = { A1: "aa", B1: 123 };
+        const repeated = window.SheetOperations.replaceInRange(
+          sheet, { range: "A1:A1" }, "a", "b", false
+        );
+        const repeatedCell = sheet.A1;
+        const numeric = window.SheetOperations.replaceInRange(
+          sheet, { range: "B1:B1" }, "123", "456", false
+        );
+        const literal = window.SheetOperations.replaceInRange(
+          sheet, { range: "A1:A1" }, "bb", "$&", false
+        );
+        return repeated === 2 && repeatedCell === "bb" &&
+          numeric === 1 && sheet.B1 === "456" &&
+          literal === 1 && sheet.A1 === "$&";
+      });
+
+      test("operation validator rejects incomplete filter and find states", () => {
+        const filterTask = taskById("data-filter-guided-0");
+        const findTask = taskById("data-find-guided-0");
+        const sheet = window.CurriculumKit.sheets.kpi;
+        return window.SheetOperations.validate(filterTask, {}, sheet).reason === "filter-missing" &&
+          window.SheetOperations.validate(findTask, {}, sheet).reason === "find-missing";
+      });
+
+      test("find validation rejects a stale query after a successful search", () => {
+        const task = taskById("data-find-guided-0");
+        const sheet = window.CurriculumKit.sheets.kpi;
+        const result = window.SheetOperations.validate(task, {
+          findQuery: "not-a-real-record",
+          activeFindRef: task.operation.expectedRef,
+          findPerformed: true,
+        }, sheet);
+        return result.ok === false && result.reason === "find-query";
+      });
+
+      test("find engine can search formulas instead of displayed values", () => {
+        const sheet = { A1: 12, A2: 30, A3: "=SUM(A1:A2)" };
+        const spec = { range: "A1:A3" };
+        const formulas = window.SheetOperations.findMatches(sheet, spec, "SUM", { lookIn: "formulas" });
+        const values = window.SheetOperations.findMatches(sheet, spec, "SUM", { lookIn: "values" });
+        return formulas.join(",") === "A3" && values.length === 0;
+      });
+
+      test("filtered course formulas require the operation and visible rows", () => {
+        const task = taskById("data-visible-review-guided-0");
+        const sheet = window.CurriculumKit.sheets.kpi;
+        const selected = I18N.text(task.operation.selectedValue, "zh-CN");
+        const hidden = window.SheetOperations.hiddenRowsForFilter(sheet, task.operation, selected);
+        const result = window.FormulaEngine.evaluate("=SUBTOTAL(9,C2:C9)", sheet, { hiddenRows: hidden });
+        return task && result.ok && result.value === task.expectedByLanguage["zh-CN"];
+      });
+
+      test("training bank exposes 50 four-to-six-question sets", () => {
+        const practice = window.PracticeContent;
+        return practice.comprehensive.total === 50 &&
+          practice.comprehensive.idAt(0) === "training-v13-01" &&
+          practice.comprehensive.idAt(49) === "training-v13-50" &&
+          practice.comprehensive.levelAt(49).steps.length >= 4 &&
+          practice.comprehensive.levelAt(49).steps.length <= 6;
+      });
+
+      test("daily bank exposes 183 three-to-four-question sets without repeats", () => {
+        const practice = window.PracticeContent;
+        const seen = new Set();
+        for (let index = 0; index < 183; index += 1) {
+          const key = practice.daily.shiftDateKey("2026-01-01", index);
+          const level = practice.daily.levelForDate(key);
+          if (level.steps.length < 3 || level.steps.length > 4) return false;
+          seen.add(level.dailyBankIndex);
+        }
+        return practice.daily.total === 183 && seen.size === 183;
+      });
+
+      test("training and daily banks do not share data", () => {
+        const training = new Set();
+        const daily = new Set();
+        for (let index = 0; index < 50; index += 1) {
+          window.PracticeContent.comprehensive.levelAt(index).steps.forEach((step) => {
+            (step.tasks || []).forEach((task) => {
+              if (task.sheet) training.add(JSON.stringify(task.sheet));
+            });
+          });
+        }
+        for (let index = 0; index < 183; index += 1) {
+          const key = window.PracticeContent.daily.shiftDateKey("2026-01-01", index);
+          window.PracticeContent.daily.levelForDate(key).steps.forEach((step) => {
+            (step.tasks || []).forEach((task) => {
+              if (task.sheet) daily.add(JSON.stringify(task.sheet));
+            });
+          });
+        }
+        return Array.from(training).every((item) => !daily.has(item));
+      });
+
+      test("practice tasks evaluate in all four languages", () => {
+        const original = I18N.getLanguage();
+        const level = window.PracticeContent.comprehensive.levelAt(0);
+        let valid = true;
+        ["zh-CN", "zh-TW", "en", "ja"].forEach((language) => {
+          I18N.setLanguage(language);
+          level.steps.forEach((step) => {
+            (step.tasks || []).forEach((task) => {
+              if (task.operationOnly) return;
+              const sheet = window.CurriculumKit.localizedSheet(task.sheet, language);
+              const selected = task.operation
+                ? I18N.text(task.operation.selectedValue, language)
+                : "";
+              const hidden = task.operation && task.operation.type === "filter"
+                ? window.SheetOperations.hiddenRowsForFilter(sheet, task.operation, selected)
+                : [];
+              const result = window.FormulaEngine.evaluate(I18N.text(task.formulaExample, language), sheet, { hiddenRows: hidden });
+              const expected = task.expectedByLanguage[language];
+              if (!result.ok) valid = false;
+              else if (typeof expected === "number" && Math.abs(result.value - expected) >= 1e-7) valid = false;
+              else if (typeof expected !== "number" && result.value !== expected) valid = false;
+            });
+          });
+        });
+        I18N.setLanguage(original);
+        return valid;
+      });
+
+      window.CourseData.indexCourse();
+      const results = document.getElementById("results");
+      let passed = 0;
+      tests.forEach((item) => {
+        const row = document.createElement("li");
+        const label = document.createElement("span");
+        const status = document.createElement("span");
+        label.textContent = item.name;
+        try {
+          const ok = Boolean(item.callback());
+          status.className = ok ? "pass" : "fail";
+          status.textContent = ok ? "PASS" : "FAIL";
+          if (ok) passed += 1;
+        } catch (error) {
+          status.className = "error";
+          status.textContent = "ERROR";
+        }
+        row.append(label, status);
+        results.append(row);
+      });
+      const summary = document.getElementById("summary");
+      summary.textContent = passed + " / " + tests.length + " audit checks passing";
+      summary.style.background = passed === tests.length ? "#246f54" : "#ac473e";
+      document.body.dataset.result = passed === tests.length ? "pass" : "fail";
+    </script>
+  </body>
+</html>

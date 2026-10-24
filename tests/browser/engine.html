@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Formula engine tests</title>
+    <style>
+      body { font-family: Consolas, monospace; padding: 24px; background: #101a14; color: #d7f7c8; }
+      .pass { color: #8ee63f; }
+      .fail { color: #ff7b6d; }
+      pre { white-space: pre-wrap; line-height: 1.6; }
+    </style>
+  </head>
+  <body>
+    <h1>Formula engine tests</h1>
+    <pre id="output">Running...</pre>
+    <script src="../../src/core/formula.js"></script>
+    <script>
+      const sheet = {
+        A1: 1, A2: 2, A3: 3,
+        B1: "x", B2: "y", B3: 5,
+        A5: "A", B5: 10,
+        A6: "B", B6: 20,
+        A8: 1200, B8: 980, C8: 860,
+        D8: 3040,
+        E5: "A", F5: "B", E6: 10, F6: 20
+      };
+      const tests = [
+        ["=SUM(A1:A3)", 6],
+        ["=SUM(A1:A3,10)", 16],
+        ["=SUM($A$1:$A$3)", 6],
+        ["=A1+A2*3", 7],
+        ["=SUM(A1:A3)/2", 3],
+        ["=AVERAGE(A1:A3)", 2],
+        ["=IF(A1=1,\"yes\",\"no\")", "yes"],
+        ["=ROUND(3.14159,2)", 3.14],
+        ["=ROUND(-2.5,0)", -3],
+        ["=ROUND(1.005,2)", 1.01],
+        ["=ROUNDUP(-2.1,0)", -3],
+        ["=ROUNDDOWN(-2.9,0)", -2],
+        ["=MOD(-3,2)", 1],
+        ["=MOD(3,-2)", -1],
+        ["=LEFT(\"Excel\",2)", "Ex"],
+        ["=MID(\"Excel\",2,3)", "xce"],
+        ["=TRIM(\"  Excel   Quest  \")", "Excel Quest"],
+        ["=CONCATENATE(\"Excel\",\" \",\"Quest\")", "Excel Quest"],
+        ["=VLOOKUP(\"B\",A5:B6,2,FALSE)", 20],
+        ["=VLOOKUP(\"Z\",A5:B6,2,FALSE)", "#N/A"],
+        ["=INDEX(B5:B6,MATCH(\"B\",A5:A6,0))", 20],
+        ["=HLOOKUP(\"B\",E5:F6,2,FALSE)", 20],
+        ["=MATCH(\"B\",A5:A6,0)", 2],
+        ["=COUNTIF(A1:A3,\">1\")", 2],
+        ["=SUMIF(A1:A3,\">1\")", 5],
+        ["=COUNTIFS(A1:A3,\">0\",A1:A3,\"<3\")", 2],
+        ["=SUMIFS(A1:A3,A1:A3,\">1\")", 5],
+        ["=AVERAGEIF(A1:A3,\">1\")", 2.5],
+        ["=IFERROR(1/0,\"safe\")", "safe"],
+        ["=SUMPRODUCT(A1:A3,A1:A3)", 14],
+        ["=RANK(2,A1:A3)", 2],
+        ["=SUBTOTAL(9,A1:A3)", 6],
+        ["=YEAR(DATE(2026,10,22))", 2026],
+        ["=MONTH(DATE(2026,10,22))", 10],
+        ["=DAY(DATE(2026,10,22))", 22],
+        ["=DATE(2026,10,22)-DATE(2026,10,1)", 21],
+        ["=TEXT(DATE(2026,1,5),\"yyyy-mm-dd\")", "2026-01-05"],
+        ["=PMT(0.05/12,36,-120000)", 3596.51, 0.02],
+        ["=PV(0.05/12,36,-3596.51)", 120000, 1],
+        ["=SUM(A8:C8)", 3040],
+        ["=SUM(A1:A3", "#VALUE!"],
+        ["=1/0", "#DIV/0!"],
+        ["=UNKNOWN(A1)", "#NAME?"],
+        ["=INDEX(A1:A3,4)", "#REF!"]
+      ];
+      let passed = 0;
+      const lines = [];
+      tests.forEach(([formula, expected, tolerance]) => {
+        const result = FormulaEngine.evaluate(formula, sheet);
+        const actual = result.ok ? result.value : result.error;
+        const ok = typeof actual === "number" && typeof expected === "number"
+          ? Math.abs(actual - expected) <= (tolerance == null ? 1e-9 : tolerance)
+          : actual === expected;
+        if (ok) passed += 1;
+        lines.push(
+          (ok ? "PASS " : "FAIL ") + formula + " => " + JSON.stringify(actual) +
+          (ok ? "" : " (expected " + JSON.stringify(expected) + ")")
+        );
+      });
+      document.getElementById("output").textContent =
+        lines.join("\n") + "\n\n" + passed + "/" + tests.length + " passed";
+      document.body.dataset.result = passed === tests.length ? "pass" : "fail";
+    </script>
+  </body>
+</html>

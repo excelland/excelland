@@ -1,0 +1,794 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EXCEL-land lab audit</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #143d2b;
+        --green: #58cc02;
+        --green-dark: #46a302;
+        --paper: #f4f7ef;
+        --line: #dce8d4;
+        --red: #b53829;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 28px;
+        color: var(--ink);
+        background: var(--paper);
+        font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+      }
+      main {
+        width: min(920px, 100%);
+        margin: 0 auto;
+        padding: 26px;
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        background: #fff;
+      }
+      h1 { margin: 0 0 8px; font-size: 26px; }
+      p { color: #647367; line-height: 1.6; }
+      #summary {
+        margin: 18px 0;
+        padding: 14px 16px;
+        border-radius: 12px;
+        color: #2d6e10;
+        background: #eef8e7;
+        font-weight: 800;
+      }
+      #summary.is-failed { color: var(--red); background: #fff1ee; }
+      ul { margin: 0; padding: 0; list-style: none; }
+      li {
+        display: flex;
+        gap: 10px;
+        justify-content: space-between;
+        padding: 8px 0;
+        border-bottom: 1px solid #edf1ea;
+        font-size: 13px;
+      }
+      li span:first-child { overflow-wrap: anywhere; }
+      .ok { color: #3c8b14; font-weight: 800; }
+      .fail { color: var(--red); font-weight: 800; }
+      code {
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>EXCEL-land lab audit</h1>
+      <p>
+        Runs the reducer, validator, renderer, localization dictionaries, and formula
+        function checks. This page makes no network requests and uses no external libraries.
+      </p>
+      <div id="summary">Running audit...</div>
+      <ul id="labAuditResults"></ul>
+    </main>
+
+    <script src="../../src/core/formula.js"></script>
+    <script src="../../src/i18n/base.js"></script>
+    <script src="../../src/lab/i18n.js"></script>
+    <script src="../../src/lab/engine.js"></script>
+    <script src="../../src/app/render.js"></script>
+    <script id="lab-audit-script">
+      (function (root) {
+        "use strict";
+
+        function auditSheet() {
+          return {
+            A1: "Region", B1: "Category", C1: "Sales", D1: "Rep", E1: "Month",
+            A2: "East", B2: "Hardware", C2: 1200, D2: "Kim", E2: "2024-01-01",
+            A3: "West", B3: "Software", C3: 800, D3: "Lee", E3: "2024-02-01",
+            A4: "East", B4: "Software", C4: 1500, D4: "Lee", E4: "2024-03-01",
+            A5: "North", B5: "Hardware", C5: 600, D5: "Ada", E5: "2024-04-01",
+            F1: 10, F2: 20, F3: 30, F4: 40, F5: 50, B10: "=C2+C3",
+            H4: 1, K1: "Region", K2: "North",
+          };
+        }
+
+        function spec(kind, mode, goal, extra) {
+          return Object.assign({
+            kind,
+            mode,
+            sheet: auditSheet(),
+            goal,
+          }, extra || {});
+        }
+
+        function labCases() {
+          return [
+            ["workbook.sheets", spec("workbook", "sheets", { operation: "rename", from: "Sheet1", to: "Details" }), [
+              { type: "renameSheet", from: "Sheet1", to: "Details" },
+            ]],
+            ["workbook.freeze", spec("workbook", "freeze", { operation: "freeze", cell: "B2" }), [
+              { type: "freeze", cell: "B2" },
+            ]],
+            ["workbook.protect", spec("workbook", "protect", { operation: "protect", scope: "sheet", protected: true, protectRange: "A1:B4" }), [
+              { type: "protect", scope: "sheet", range: "A1:B4" },
+            ]],
+            ["workbook.print", spec("workbook", "print", {
+              operation: "print", orientation: "landscape", paper: "A4", printArea: "A1:F24",
+              printTitles: "1:1", scale: 80, gridlines: true,
+            }), [
+              { type: "set", field: "orientation", value: "landscape" },
+              { type: "set", field: "printArea", value: "A1:F24" },
+              { type: "set", field: "printTitles", value: "1:1" },
+              { type: "set", field: "scale", value: 80 },
+              { type: "set", field: "gridlines", value: true },
+            ]],
+            ["workbook.namedRange", spec("workbook", "namedRange", {
+              operation: "namedRange", name: "SalesData", refersTo: "A2:C5",
+            }), [
+              { type: "createName", name: "SalesData", refersTo: "A2:C5" },
+            ]],
+            ["workbook.multiSheet", {
+              kind: "workbook",
+              mode: "multiSheet",
+              workbook: {
+                active: "Main",
+                sheets: [
+                  { name: "Main", cells: { A1: "Total" } },
+                  { name: "Data", cells: { A1: 10, A2: 20 } },
+                ],
+              },
+              goal: { operation: "formula", sheet: "Main", cell: "B2", formula: "=SUM(Data!A1:A2)" },
+            }, [
+              { type: "applyFormula", sheet: "Main", cell: "B2", formula: "=SUM(Data!A1:A2)" },
+            ]],
+            ["workbook.audit", spec("workbook", "audit", {
+              operation: "audit", auditAction: "showFormulas", showFormulas: true, auditCell: "B10",
+            }), [
+              { type: "set", field: "auditAction", value: "showFormulas" },
+              { type: "set", field: "showFormulas", value: true },
+              { type: "set", field: "auditCell", value: "B10" },
+            ]],
+            ["format.conditional", spec("format", "conditional", {
+              operation: "conditional", range: "C2:C9", ruleType: "cellValue",
+              operator: "greaterThan", value1: 1000, fill: "#C6EFCE", font: "#006100",
+            }), [
+              { type: "set", field: "range", value: "C2:C9" },
+              { type: "set", field: "value1", value: 1000 },
+              { type: "set", field: "fill", value: "#C6EFCE" },
+              { type: "set", field: "font", value: "#006100" },
+            ]],
+            ["format.validation", spec("format", "validation", {
+              operation: "validation", range: "B2:B30", allow: "list",
+              source: "=$E$2:$E$5", inputTitle: "Choose", errorStyle: "stop",
+            }), [
+              { type: "set", field: "range", value: "B2:B30" },
+              { type: "set", field: "source", value: "=$E$2:$E$5" },
+              { type: "set", field: "inputTitle", value: "Choose" },
+            ]],
+            ["format.numberFormat", spec("format", "numberFormat", {
+              operation: "numberFormat", range: "C2:C9", format: "percent", decimals: 1,
+            }), [
+              { type: "set", field: "range", value: "C2:C9" },
+              { type: "set", field: "format", value: "percent" },
+              { type: "set", field: "decimals", value: 1 },
+            ]],
+            ["format.tableStyle", spec("format", "tableStyle", {
+              operation: "tableStyle", range: "A1:E5", tableStyle: "TableStyleMedium2",
+              headerRow: true, bandedRows: true,
+            }), [
+              { type: "set", field: "range", value: "A1:E5" },
+              { type: "set", field: "style", value: "TableStyleMedium2" },
+            ]],
+            ["data.sort", spec("data", "sort", {
+              operation: "sort", range: "A1:E5", levels: [{ column: "C", order: "desc" }], hasHeaders: true,
+            }), [
+              { type: "set", field: "range", value: "A1:E5" },
+              { type: "set", field: "levels.0.column", value: "C" },
+              { type: "set", field: "levels.0.order", value: "desc" },
+            ]],
+            ["data.advancedFilter", spec("data", "advancedFilter", {
+              operation: "advancedFilter", listRange: "A1:E5", criteriaRange: "G1:G2",
+              action: "copyTo", copyTo: "H1",
+            }), [
+              { type: "set", field: "listRange", value: "A1:E5" },
+              { type: "set", field: "criteriaRange", value: "G1:G2" },
+              { type: "set", field: "action", value: "copyTo" },
+              { type: "set", field: "copyTo", value: "H1" },
+            ]],
+            ["data.removeDuplicates", spec("data", "removeDuplicates", {
+              operation: "removeDuplicates", range: "A1:E5", columnsToCheck: ["A"], hasHeaders: true,
+            }), [
+              { type: "set", field: "range", value: "A1:E5" },
+              { type: "toggleColumn", column: "A" },
+            ]],
+            ["data.textToColumns", spec("data", "textToColumns", {
+              operation: "textToColumns", range: "D2:D5", dataType: "delimited", delimiter: "-",
+            }), [
+              { type: "set", field: "range", value: "D2:D5" },
+              { type: "set", field: "dataType", value: "delimited" },
+              { type: "set", field: "delimiter", value: "-" },
+            ]],
+            ["data.pasteSpecial", spec("data", "pasteSpecial", {
+              operation: "pasteSpecial", sourceRange: "C2:C5", destination: "H2",
+              pasteOperation: "values", transpose: false,
+            }), [
+              { type: "set", field: "sourceRange", value: "C2:C5" },
+              { type: "set", field: "destination", value: "H2" },
+              { type: "set", field: "pasteOperation", value: "values" },
+            ]],
+            ["data.subtotal", spec("data", "subtotal", {
+              operation: "subtotal", range: "A1:E5", groupBy: "A", functionNumber: 9, subtotalColumns: ["C"],
+            }), [
+              { type: "set", field: "range", value: "A1:E5" },
+              { type: "set", field: "groupBy", value: "A" },
+              { type: "set", field: "subtotalColumns", value: "C", valueType: "list" },
+            ]],
+            ["data.consolidate", spec("data", "consolidate", {
+              operation: "consolidate", ranges: "A1:C5", functionNumber: 9,
+            }), [
+              { type: "set", field: "ranges", value: "A1:C5" },
+            ]],
+            ["data.import", spec("data", "import", {
+              operation: "import", importSource: "csv", delimiter: ",", hasHeaders: true,
+              importText: "Region,Sales\nEast,100",
+            }), [
+              { type: "set", field: "importText", value: "Region,Sales\nEast,100" },
+            ]],
+            ["visual.chart", spec("visual", "chart", {
+              operation: "chart", chartType: "column", dataRange: "A1:E5",
+              seriesBy: "columns", title: "Sales", showLegend: true,
+            }), [
+              { type: "set", field: "dataRange", value: "A1:E5" },
+              { type: "set", field: "title", value: "Sales" },
+            ]],
+            ["visual.sparkline", spec("visual", "sparkline", {
+              operation: "sparkline", targetCell: "H2", dataRange: "F1:F5", sparklineType: "line",
+            }), [
+              { type: "set", field: "sparklineRange", value: "F1:F5" },
+              { type: "set", field: "targetCell", value: "H2" },
+              { type: "set", field: "sparklineType", value: "line" },
+            ]],
+            ["visual.pivot", spec("visual", "pivot", {
+              operation: "pivot", sourceRange: "A1:E5", destination: "H3", rows: ["A"],
+              columns: ["B"], values: [{ field: "C", aggregate: "SUM" }],
+              filters: [{ field: "D", value: "Lee" }],
+            }), [
+              { type: "set", field: "sourceRange", value: "A1:E5" },
+              { type: "set", field: "destination", value: "H3" },
+              { type: "addPivotRow", field: "A" },
+              { type: "addPivotColumn", field: "B" },
+              { type: "addPivotValue", field: "C", aggregate: "SUM" },
+              { type: "addPivotFilter", field: "D", value: "Lee" },
+            ]],
+            ["visual.pivotChart", spec("visual", "pivotChart", {
+              operation: "pivotChart", sourceRange: "A1:E5", destination: "H3",
+              rows: ["A"], values: [{ field: "C", aggregate: "SUM" }], chartType: "column",
+            }), [
+              { type: "set", field: "sourceRange", value: "A1:E5" },
+              { type: "set", field: "destination", value: "H3" },
+              { type: "addPivotRow", field: "A" },
+              { type: "addPivotValue", field: "C", aggregate: "SUM" },
+            ]],
+            ["analysis.goalSeek", spec("analysis", "goalSeek", {
+              operation: "goalSeek", targetCell: "B10", targetValue: 2000, variableCell: "C2",
+            }), [
+              { type: "set", field: "targetCell", value: "B10" },
+              { type: "set", field: "targetValue", value: 2000 },
+              { type: "set", field: "variableCell", value: "C2" },
+            ]],
+            ["analysis.dataTable", spec("analysis", "dataTable", {
+              operation: "dataTable", formulaCell: "B10", rowInputCell: "B2",
+              columnInputCell: "B3", resultCell: "D2",
+            }), [
+              { type: "set", field: "formulaCell", value: "B10" },
+              { type: "set", field: "rowInputCell", value: "B2" },
+              { type: "set", field: "columnInputCell", value: "B3" },
+              { type: "set", field: "resultCell", value: "D2" },
+            ]],
+            ["analysis.scenario", spec("analysis", "scenario", {
+              operation: "scenario", scenarios: [{ name: "Best", changingCell: "C2", value: 1500 }],
+            }), [
+              { type: "addScenario", name: "Best", cell: "C2", value: 1500 },
+            ]],
+            ["analysis.solver", spec("analysis", "solver", {
+              operation: "solver", objectiveCell: "B10", objective: "max",
+              variableCells: ["C2"], constraints: "C2<=2000",
+            }), [
+              { type: "set", field: "objectiveCell", value: "B10" },
+              { type: "set", field: "objective", value: "max" },
+              { type: "set", field: "variableCells", value: "C2", valueType: "list" },
+              { type: "set", field: "constraints", value: "C2<=2000" },
+            ]],
+            ["analysis.forecast", spec("analysis", "forecast", {
+              operation: "forecast", forecastRange: "F1:F5", periods: 3, seasonality: false,
+            }), [
+              { type: "set", field: "forecastRange", value: "F1:F5" },
+              { type: "set", field: "periods", value: 3 },
+            ]],
+            ["analysis.array", spec("analysis", "array", {
+              operation: "array", formulaCell: "E2", formula: "=SEQUENCE(2,2)",
+            }), [
+              { type: "set", field: "formulaCell", value: "E2" },
+              { type: "set", field: "arrayFormula", value: "=SEQUENCE(2,2)" },
+            ]],
+          ];
+        }
+
+        function runLabAudit(Lab, I18N) {
+          const results = [];
+          const assert = (condition, message) => {
+            if (!condition) throw new Error(message);
+          };
+          const test = (name, callback) => {
+            try {
+              callback();
+              results.push({ name, ok: true });
+            } catch (error) {
+              results.push({ name, ok: false, message: error.message });
+            }
+          };
+          const applyAll = (lab, state, actions) => {
+            actions.forEach((action) => {
+              const update = Lab.handleAction(action, null, { lab, state });
+              assert(update, "Action produced no state update: " + action.type);
+              Object.assign(state, update);
+            });
+          };
+
+          assert(Lab && typeof Lab.initialState === "function", "ExcelLab is not loaded");
+          assert(I18N && typeof I18N.t === "function", "I18N is not loaded");
+
+          test("i18n dictionaries have matching keys", () => {
+            const dictionaries = root.LabI18N && root.LabI18N.dictionaries;
+            assert(dictionaries, "LabI18N is not loaded");
+            const expected = Object.keys(dictionaries.en).sort();
+            ["zh-CN", "ja", "zh-TW"].forEach((language) => {
+              const actual = Object.keys(dictionaries[language]).sort();
+              assert(actual.length === expected.length, language + " has a different key count");
+              assert(actual.every((key, index) => key === expected[index]), language + " has missing or extra keys");
+            });
+          });
+
+          labCases().forEach(([name, lab, actions]) => {
+            test("lab." + name, () => {
+              const state = Lab.initialState(lab);
+              const before = Lab.validate(lab, state);
+              assert(before && before.ok === false, "Initial state should not pass");
+              applyAll(lab, state, actions);
+              const after = Lab.validate(lab, state);
+              assert(after && after.ok === true, after && after.reason ? after.reason : "Validation did not pass");
+              const html = Lab.renderStep({
+                type: "lab", title: "Title", lead: "Lead", hint: "Hint", success: "Success", lab,
+              }, { kind: "lesson", number: 1 }, {
+                labState: state, feedback: null, hintVisible: false, isLastStep: false,
+              });
+              assert(html.indexOf("lab-workspace") >= 0, "Lab workspace missing");
+              assert(html.indexOf("[object Object]") < 0, "Renderer exposed an object");
+              assert(html.indexOf('"goal"') < 0, "Renderer exposed goal JSON");
+              assert(html.indexOf("lab.mode.") < 0, "Renderer exposed a raw mode key");
+              assert(html.indexOf("lab.field.") < 0, "Renderer exposed a raw field key");
+              assert(html.indexOf(I18N.t("lab.noData")) < 0, "Preview fell back to the no-data state");
+            });
+          });
+
+          test("validator reports a specific field", () => {
+            const lab = spec("format", "numberFormat", {
+              operation: "numberFormat", range: "C2:C9", format: "percent",
+            });
+            const result = Lab.validate(lab, Lab.initialState(lab));
+            assert(result.ok === false, "Mismatch should fail");
+            assert(result.field === "range", "Mismatch should identify the range field");
+            assert(/C2:C9/.test(result.reason), "Mismatch should include the expected value");
+          });
+
+          test("reducer.buttonActionFallback", () => {
+            const lab = spec("analysis", "scenario", {
+              operation: "scenario", scenarios: [{ name: "Plan", changingCell: "C2", value: 900 }],
+            });
+            let state = Lab.initialState(lab);
+            [
+              { type: "set", field: "scenarioName", value: "Plan" },
+              { type: "set", field: "changingCell", value: "C2" },
+              { type: "set", field: "scenarioValue", value: "900" },
+            ].forEach((action) => {
+              Object.assign(state, Lab.handleAction(action, null, { lab, state }));
+            });
+            Object.assign(state, Lab.handleAction({ type: "addScenario" }, null, { lab, state }));
+            assert(state.config.scenarios.length === 1, "Button fallback did not use the configured values");
+            assert(state.config.scenarios[0].value === 900, "Scenario value was not coerced");
+          });
+
+          const contentValue = (value) => {
+            if (Array.isArray(value)) return value.map(contentValue);
+            if (value && typeof value === "object") {
+              if (["zh-CN", "en", "ja", "zh-TW"].some((language) => (
+                Object.prototype.hasOwnProperty.call(value, language)
+              ))) return I18N.text(value);
+              const result = {};
+              Object.entries(value).forEach(([key, item]) => { result[key] = contentValue(item); });
+              return result;
+            }
+            return value;
+          };
+
+          test("goal.localizedValues", () => {
+            const localized = {
+              "zh-CN": "Needs review",
+              en: "Needs review",
+              ja: "Needs review",
+              "zh-TW": "Needs review",
+            };
+            const lab = spec("format", "conditional", {
+              operation: "conditional", range: "A2:A4", ruleType: "textContains",
+              value1: localized, fill: "#FFEB9C", font: "#9C5700",
+            });
+            let state = Lab.initialState(lab);
+            ["range", "ruleType", "value1", "fill", "font"].forEach((field) => {
+              Object.assign(state, Lab.handleAction({
+                type: "set", field, value: contentValue(lab.goal[field]),
+              }, null, { lab, state }));
+            });
+            assert(Lab.validate(lab, state).ok, "Localized goal field did not compare");
+
+            const filterValue = {
+              "zh-CN": "East", en: "East", ja: "East", "zh-TW": "East",
+            };
+            const pivotLab = spec("visual", "pivot", {
+              operation: "pivot", sourceRange: "A1:C5", destination: "H2",
+              rows: ["A"], columns: [], values: [{ field: "C", aggregate: "SUM" }],
+              filters: [{ field: "A", value: filterValue }],
+              showAs: "normal", groupDate: "none", slicer: false,
+            });
+            let pivotState = Lab.initialState(pivotLab);
+            Object.entries(pivotLab.goal).forEach(([field, fieldValue]) => {
+              if (field === "operation") return;
+              Object.assign(pivotState, Lab.handleAction({
+                type: "set", field, value: contentValue(fieldValue),
+              }, null, { lab: pivotLab, state: pivotState }));
+            });
+            assert(Lab.validate(pivotLab, pivotState).ok, "Localized nested goal value did not compare");
+          });
+
+          test("controls.localizedColumnHeaders", () => {
+            const header = {
+              "zh-CN": "区域", en: "Region", ja: "地域", "zh-TW": "區域",
+            };
+            const lab = spec("visual", "pivot", {
+              operation: "pivot", sourceRange: "A1:C5", destination: "H2",
+              rows: ["A"], columns: [], values: [{ field: "C", aggregate: "SUM" }],
+              filters: [], showAs: "normal", groupDate: "none", slicer: false,
+            });
+            lab.sheet.A1 = header;
+            const state = Lab.initialState(lab);
+            const html = Lab.renderStep({
+              type: "lab", title: "Title", lead: "Lead", hint: "Hint", success: "Success", lab,
+            }, { kind: "lesson" }, { labState: state, feedback: null, hintVisible: false });
+            assert(html.indexOf(I18N.text(header)) >= 0, "Localized column header was not rendered");
+            assert(html.indexOf("[object Object]") < 0, "Localized column header became an object");
+          });
+
+          test("controls.conditionalAdvanced", () => {
+            const lab = spec("format", "conditional", {
+              operation: "conditional", range: "C2:C4", ruleType: "iconSet",
+              iconStyle: "3TrafficLights", reverse: true,
+            });
+            let state = Lab.initialState(lab);
+            ["range", "ruleType", "iconStyle", "reverse"].forEach((field) => {
+              Object.assign(state, Lab.handleAction({
+                type: "set", field, value: lab.goal[field],
+              }, null, { lab, state }));
+            });
+            const html = Lab.renderStep({
+              type: "lab", title: "Title", lead: "Lead", hint: "Hint", success: "Success", lab,
+            }, { kind: "lesson" }, { labState: state, feedback: null, hintVisible: false });
+            ["minColor", "midColor", "maxColor", "iconStyle", "reverse", "formula"].forEach((field) => {
+              assert(html.indexOf('data-lab-field="' + field + '"') >= 0, "Missing conditional control: " + field);
+            });
+            assert(html.indexOf("is-icon-set") >= 0, "Icon-set preview did not render");
+
+            state.config.ruleType = "formula";
+            state.config.formula = "=$C2>1000";
+            state.config.fill = "#FFF2CC";
+            state.config.font = "#7F6000";
+            const formulaHtml = Lab.renderPreview(lab, state, {
+              type: "lab", lab,
+            });
+            assert(formulaHtml.indexOf("#FFF2CC") >= 0, "Formula rule preview did not apply");
+          });
+
+          test("controls.validationRangeAndFormula", () => {
+            const lab = spec("format", "validation", {
+              operation: "validation", range: "A2:A4", allow: "custom",
+              operator: "between", minimum: 0, maximum: 10, formula: "=A2>0",
+            });
+            const html = Lab.renderStep({
+              type: "lab", title: "Title", lead: "Lead", hint: "Hint", success: "Success", lab,
+            }, { kind: "lesson" }, {
+              labState: Lab.initialState(lab), feedback: null, hintVisible: false,
+            });
+            ["operator", "minimum", "maximum", "formula"].forEach((field) => {
+              assert(html.indexOf('data-lab-field="' + field + '"') >= 0, "Missing validation control: " + field);
+            });
+          });
+
+          test("preview.customSortOrder", () => {
+            const lab = {
+              kind: "data",
+              mode: "sort",
+              sheet: {
+                A1: "Item", B1: "Priority",
+                A2: "One", B2: "P2",
+                A3: "Two", B3: "P1",
+                A4: "Three", B4: "P3",
+              },
+              options: { customList: ["P1", "P2", "P3"], hasHeaders: true },
+              goal: {
+                operation: "sort", range: "A1:B4", hasHeaders: true,
+                levels: [{ column: "B", order: "custom" }],
+              },
+            };
+            let state = Lab.initialState(lab);
+            [
+              ["range", "A1:B4"],
+              ["hasHeaders", true],
+              ["levels", [{ column: "B", order: "custom" }]],
+            ].forEach(([field, value]) => {
+              Object.assign(state, Lab.handleAction({
+                type: "set", field, value,
+              }, null, { lab, state }));
+            });
+            const html = Lab.renderPreview(lab, state, { type: "lab", lab });
+            const p1 = html.indexOf("P1");
+            const p2 = html.indexOf("P2");
+            const p3 = html.indexOf("P3");
+            assert(p1 >= 0 && p1 < p2 && p2 < p3, "Custom list order was not applied");
+            const stepHtml = Lab.renderStep({
+              type: "lab", title: "Title", lead: "Lead", hint: "Hint", success: "Success", lab,
+            }, { kind: "lesson" }, { labState: state, feedback: null, hintVisible: false });
+            assert(stepHtml.indexOf('value="custom"') >= 0, "Custom sort option is missing");
+          });
+
+          test("preview.scatterAndCombo", () => {
+            const headerX = { "zh-CN": "广告投入", en: "Ad spend", ja: "広告費", "zh-TW": "廣告投入" };
+            const headerY = { "zh-CN": "订单数", en: "Orders", ja: "注文数", "zh-TW": "訂單數" };
+            const lab = {
+              kind: "visual",
+              mode: "chart",
+              sheet: {
+                A1: "Month", B1: headerX, C1: headerY,
+                A2: "Jan", B2: 100, C2: 20,
+                A3: "Feb", B3: 200, C3: 45,
+                A4: "Mar", B4: 350, C4: 62,
+              },
+              goal: { operation: "chart" },
+            };
+            let state = Lab.initialState(lab);
+            [
+              ["chartType", "scatter"],
+              ["dataRange", "B1:C4"],
+              ["seriesBy", "columns"],
+              ["title", "Scatter"],
+              ["showLegend", false],
+              ["dataLabels", false],
+              ["trendline", true],
+              ["secondaryAxis", false],
+            ].forEach(([field, value]) => {
+              Object.assign(state, Lab.handleAction({
+                type: "set", field, value,
+              }, null, { lab, state }));
+            });
+            const scatter = Lab.renderPreview(lab, state, { type: "lab", lab });
+            assert(scatter.indexOf("is-scatter") >= 0, "Scatter chart branch did not render");
+            assert((scatter.match(/lab-scatter-point/g) || []).length === 3, "Scatter points are missing");
+            assert(scatter.indexOf("lab-scatter-trendline") >= 0, "Scatter trendline is missing");
+
+            state.config.chartType = "combo";
+            state.config.dataRange = "A1:C4";
+            state.config.secondaryAxis = true;
+            state.config.showLegend = true;
+            const combo = Lab.renderPreview(lab, state, { type: "lab", lab });
+            assert((combo.match(/lab-combo-column/g) || []).length >= 1, "Combo columns are missing");
+            assert((combo.match(/lab-combo-line/g) || []).length === 1, "Combo line is missing");
+            const stepHtml = Lab.renderStep({
+              type: "lab", title: "Title", lead: "Lead", hint: "Hint", success: "Success", lab,
+            }, { kind: "lesson" }, { labState: state, feedback: null, hintVisible: false });
+            assert(stepHtml.indexOf('value="scatter"') >= 0, "Scatter chart control is missing");
+            assert(stepHtml.indexOf('value="combo"') >= 0, "Combo chart control is missing");
+            assert(scatter.indexOf("[object Object]") < 0 && combo.indexOf("[object Object]") < 0,
+              "Localized chart headers became objects");
+          });
+
+          test("preview.pivotCalculatedAndRefresh", () => {
+            const lab = {
+              kind: "visual",
+              mode: "pivot",
+              sheet: {
+                A1: "Team", B1: "Revenue", C1: "Cost",
+                A2: "East", B2: 1000, C2: 600,
+                A3: "West", B3: 800, C3: 500,
+                A4: "East", B4: 500, C4: 250,
+              },
+              goal: {
+                operation: "pivot", sourceRange: "A1:C4", destination: "H2",
+                rows: ["A"], columns: [], values: [{ field: "Margin", aggregate: "SUM" }],
+                filters: [], showAs: "normal", groupDate: "none", slicer: false,
+                calculatedField: { name: "Margin", formula: "=B-C" }, refresh: true,
+              },
+            };
+            let state = Lab.initialState(lab);
+            Object.entries(lab.goal).forEach(([field, value]) => {
+              if (field === "operation") return;
+              Object.assign(state, Lab.handleAction({
+                type: "set", field, value: contentValue(value),
+              }, null, { lab, state }));
+            });
+            const html = Lab.renderStep({
+              type: "lab", title: "Title", lead: "Lead", hint: "Hint", success: "Success", lab,
+            }, { kind: "lesson" }, { labState: state, feedback: null, hintVisible: false });
+            assert(html.indexOf('data-lab-field="calculatedField.name"') >= 0, "Calculated field name control is missing");
+            assert(html.indexOf('data-lab-field="calculatedField.formula"') >= 0, "Calculated field formula control is missing");
+            assert(html.indexOf('data-lab-field="refresh"') >= 0, "Refresh control is missing");
+            assert(html.indexOf("lab-pivot-table") >= 0, "Calculated pivot did not render");
+            assert(html.indexOf("Margin") >= 0, "Calculated field name is missing from the preview");
+            assert(html.indexOf("lab-refresh-badge") >= 0, "Refresh badge is missing");
+            assert(Lab.validate(lab, state).ok, "Calculated-field pivot goal did not validate");
+          });
+
+          test("views.routesLab", () => {
+            assert(root.Views && typeof root.Views.renderStep === "function", "Views is not loaded");
+            const lab = spec("format", "numberFormat", {
+              operation: "numberFormat", range: "C2:C9", format: "percent",
+            });
+            const html = root.Views.renderStep({
+              type: "lab", title: "Title", lead: "Lead", hint: "Hint", success: "Success", lab,
+            }, { kind: "lesson", number: 1 }, {
+              labState: Lab.initialState(lab), feedback: null, hintVisible: false, isLastStep: false,
+            });
+            assert(html.indexOf("lab-workspace") >= 0, "Views did not route to the lab renderer");
+          });
+
+          test("renderer escapes content", () => {
+            const lab = spec("workbook", "freeze", { operation: "freeze", cell: "B2" });
+            lab.sheet.A1 = "<img src=x onerror=alert(1)>";
+            const html = Lab.renderStep({
+              type: "lab",
+              title: "<script>bad()</scr" + "ipt>",
+              lead: "<b>lead</b>",
+              hint: "Hint",
+              success: "Success",
+              lab,
+            }, { kind: "lesson" }, {
+              labState: Lab.initialState(lab), feedback: null, hintVisible: false,
+            });
+            assert(html.indexOf("<script>bad()</scr" + "ipt>") < 0, "Title was not escaped");
+            assert(html.indexOf("<img src=x") < 0, "Cell content was not escaped");
+          });
+
+          const Engine = root.FormulaEngine;
+          const formulaSheet = Object.assign(auditSheet(), {
+            G1: 0, G2: -100, G3: 60, G4: 60,
+            I1: "Rep", I2: "Ada",
+            J1: "Region", J2: "East",
+          });
+          const formulaCases = [
+            ["IFS(A2>0,1,TRUE,2)", 1],
+            ["SWITCH(2,1,10,2,20,30)", 20],
+            ['SUBSTITUTE("a-b-b","b","x",2)', "a-b-x"],
+            ['REPLACE("abcdef",2,3,"Z")', "aZef"],
+            ['VALUE("1,234.5")', 1234.5],
+            ['PROPER("hello world")', "Hello World"],
+            ['CONCAT(F1:F3,"x")', "102030x"],
+            ['TEXTJOIN("-",TRUE,A2:A5,"z")', "East-West-East-North-z"],
+            ['REPT("ab",2)', "abab"],
+            ["COUNTBLANK(H1:H4)", 3],
+            ["MEDIAN(C2:C4)", 1200],
+            ["LARGE(C2:C4,2)", 1200],
+            ["SMALL(C2:C4,2)", 1200],
+            ["RANK.EQ(C2,C2:C4)", 2],
+            ["CEILING(4.3,2)", 6],
+            ["FLOOR(4.3,2)", 4],
+            ["CHOOSE(2,10,20,30)", 20],
+            ["SUM(OFFSET(F1,0,0,3,1))", 60],
+            ['SUM(INDIRECT("F1:F3"))', 60],
+            ["ROW(F3)", 3],
+            ["COLUMN(C1)", 3],
+            ["ROWS(A1:C3)", 3],
+            ["COLUMNS(A1:C3)", 3],
+            ["WEEKDAY(DATE(2024,1,1),2)", 1],
+            ["WEEKNUM(DATE(2024,1,1),21)", 1],
+            ['TEXT(EDATE(DATE(2024,1,31),1),"yyyy-mm-dd")', "2024-02-29"],
+            ['TEXT(EOMONTH(DATE(2024,1,15),1),"yyyy-mm-dd")', "2024-02-29"],
+            ['TEXT(WORKDAY(DATE(2024,1,1),5),"yyyy-mm-dd")', "2024-01-08"],
+            ["NETWORKDAYS(DATE(2024,1,1),DATE(2024,1,7))", 5],
+            ['DATEDIF(DATE(2020,1,15),DATE(2024,3,20),"Y")', 4],
+            ["ROUND(NPV(0.1,100,100),4)", 173.5537],
+            ['DSUM(A1:C5,"Sales",J1:J2)', 2700],
+            ['DCOUNT(A1:C5,"Sales",J1:J2)', 2],
+            ['DGET(A1:C5,"Sales",K1:K2)', 600],
+            ['XLOOKUP("East",A2:A4,C2:C4,"none",0,-1)', 1500],
+            ["UNIQUE(A2:A4)", "East"],
+            ["FILTER(A2:A4,A2:A4=\"East\")", "East"],
+            ["SORT(F1:F5,1,-1)", 50],
+            ["SEQUENCE(2,2,1,2)", 1],
+          ];
+          formulaCases.forEach(([formula, expected]) => {
+            test("formula." + formula, () => {
+              const result = Engine.evaluate("=" + formula, formulaSheet);
+              assert(result.ok, result.error || "Formula failed");
+              assert(result.value === expected, "Expected " + expected + ", got " + result.value);
+            });
+          });
+          test("formula.IRR", () => {
+            const result = Engine.evaluate("=IRR(G2:G4)", formulaSheet);
+            assert(result.ok, result.error || "IRR failed");
+            assert(Math.abs(result.value - 0.1306623863) < 0.0001, "IRR returned " + result.value);
+          });
+          test("formula.RAND", () => {
+            const result = Engine.evaluate("=RAND()", formulaSheet);
+            assert(result.ok && result.value >= 0 && result.value < 1, "RAND returned " + result.value);
+          });
+          test("formula.RANDBETWEEN", () => {
+            const result = Engine.evaluate("=RANDBETWEEN(1,3)", formulaSheet);
+            assert(result.ok && Number.isInteger(result.value) && result.value >= 1 && result.value <= 3,
+              "RANDBETWEEN returned " + result.value);
+          });
+          test("formula.GETPIVOTDATA", () => {
+            const result = Engine.evaluate('=GETPIVOTDATA("Sales",A1,"Region","East")', formulaSheet, {
+              pivotData: [{ Region: "East", Sales: 250 }, { Region: "West", Sales: 200 }],
+            });
+            assert(result.ok && result.value === 250, "GETPIVOTDATA failed");
+          });
+          test("formula.crossSheet", () => {
+            const result = Engine.evaluate("=SUM(Data!A1:A2)", formulaSheet, {
+              sheets: { Data: { A1: 4, A2: 6 } },
+            });
+            assert(result.ok && result.value === 10, "Cross-sheet reference failed");
+          });
+          test("formula.threeDReference", () => {
+            const result = Engine.evaluate("=SUM(Sheet1:Sheet3!A1)", formulaSheet, {
+              sheets: {
+                Sheet1: { A1: 1 },
+                Sheet2: { A1: 2 },
+                Sheet3: { A1: 3 },
+              },
+            });
+            assert(result.ok && result.value === 6, "3-D reference failed");
+          });
+          test("formula.namedRange", () => {
+            const result = Engine.evaluate("=SUM(SalesData)", formulaSheet, {
+              names: { SalesData: "F1:F3" },
+            });
+            assert(result.ok && result.value === 60, "Named range resolution failed");
+          });
+          test("formula.arrayBroadcast", () => {
+            const result = Engine.evaluate("=SUM(FILTER(F1:F5,F1:F5>20))", formulaSheet);
+            assert(result.ok && result.value === 120, "FILTER array comparison failed");
+          });
+
+          const passed = results.filter((result) => result.ok).length;
+          return { passed, failed: results.length - passed, results };
+        }
+
+        root.runLabAudit = runLabAudit;
+
+        if (typeof document !== "undefined" && document.getElementById("labAuditResults")) {
+          const report = runLabAudit(root.ExcelLab, root.I18N);
+          const summary = document.getElementById("summary");
+          const list = document.getElementById("labAuditResults");
+          summary.textContent = report.failed
+            ? report.failed + " failed, " + report.passed + " passed"
+            : report.passed + " checks passed";
+          summary.classList.toggle("is-failed", report.failed > 0);
+          list.innerHTML = report.results.map((result) => (
+            '<li><span>' + result.name.replace(/[&<>"']/g, (character) => ({
+              "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+            }[character])) + '</span><span class="' + (result.ok ? "ok" : "fail") + '">' +
+              (result.ok ? "PASS" : "FAIL: " + result.message.replace(/[&<>"']/g, (character) => ({
+                "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+              }[character]))) + "</span></li>"
+          )).join("");
+          document.body.dataset.audit = report.failed ? "failed" : "passed";
+        }
+      })(typeof window !== "undefined" ? window : globalThis);
+    </script>
+  </body>
+</html>
